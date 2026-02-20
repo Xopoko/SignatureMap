@@ -1,155 +1,162 @@
-# SignatureMap
+# Signature Map
 
-Extract your project’s “API surface” (function/method signatures + nearby doc comments) into a single `signatures.json` file — ready to paste into an LLM/agent context.
+Portable skill package for fast declaration-level code navigation using generated `signatures.json`.
 
-This is a lightweight, dependency-free-ish approach: one Bash script that runs an embedded Python parser.
+## Why this exists
 
----
+The main goal is to give coding agents a fast, cheap, high-value context layer before they start expensive repository exploration.
 
-## What it does
+Instead of spending many steps on manual discovery (`ls`, broad `rg`, opening many files), an agent can read a compact declaration map and immediately understand:
 
-- Recursively scans your repository (starting from repo root).
-- Finds function/method definitions in multiple languages.
-- Grabs the closest preceding comment block (doc comment / inline comments).
-- Writes everything into a **single JSON** file: `signatures.json`.
+- what symbols exist
+- where they are located
+- what they look like (signature + nearby doc comment)
 
-Use cases:
-- Give an agent quick “map” of your codebase without uploading the whole repo.
-- Build retrieval/embeddings on top of a compact API-index.
-- Diff API changes by comparing JSON outputs in CI.
+This reduces context cost and improves task startup speed.  
+On top of that, `sigmap` provides syntax sugar over the map (`name/search/open/doctor`) so agents can query and open relevant code directly.
 
----
+## What it provides
 
-## Supported languages
+- declaration index with `path::symbol`, signature, nearest comment, line, and `kind`
+- canonical runtime commands:
+  - `scripts/sigmap`
+  - `scripts/generate-signatures.sh`
+- installer for Codex/Claude, global or local scope
 
-Detected mainly by file extension:
-
-- Swift (`.swift`)
-- Objective-C (`.m`, `.mm`, `.h`)
-- C/C++ (`.c`, `.cc`, `.cpp`, `.hpp`)
-- JavaScript/TypeScript (`.js`, `.jsx`, `.ts`, `.tsx`)
-- Python (`.py`)
-- Ruby (`.rb`)
-- Shell (`.sh`, `.bash`, `.zsh`) + shebang detection
-- Kotlin (`.kt`, `.kts`)
-- Java/Groovy (`.java`, `.groovy`)
-
-> Parsing is heuristic/regex-based (fast and “good enough” for signature extraction, not a full parser).
-
----
-
-## Excluded directories
-
-Common build/dependency folders are skipped:
-
-- `.git`, `.github`, `.swiftpm`, `.build`, `build`, `DerivedData`
-- `Carthage`, `Pods`, `RemoteDependencies`
-- `Tuist/Dependencies`
-- `.idea`, `.vscode`
-- (and a few project-specific entries)
-
----
-
-## Requirements
-
-- Bash
-- Python 3 (preferred) or Python 2/any `python` fallback
-
-You can override the interpreter:
+## Quick start (from checkout)
 
 ```bash
-PYTHON_BIN=python3 ./generate-signatures.sh
+./scripts/sigmap refresh --root <repo_root>
+./scripts/sigmap name <SymbolName> --root <repo_root> --no-refresh
+./scripts/sigmap search "<regex>" --field all --icase --root <repo_root> --no-refresh
+./scripts/sigmap open "<relative/file::symbol>" --root <repo_root> --context 60 --no-refresh
+```
+
+## One-line install (no clone)
+
+Global auto-detect:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xopoko/SignatureMap/main/install.sh | bash -s -- install
+```
+
+Local install for both providers into current project:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xopoko/SignatureMap/main/install.sh | bash -s -- install --agent both --scope local --project-root "$PWD"
+```
+
+Pinned ref:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xopoko/SignatureMap/<ref>/install.sh | bash -s -- install --repo Xopoko/SignatureMap --ref <ref>
+```
+
+## Installer CLI
+
+```bash
+./install.sh [install|update|uninstall|doctor] [options]
+```
+
+Main options:
+
+- `--agent codex|claude|both|auto` (default `auto`)
+- `--scope global|local` (default `global`)
+- `--project-root <path>` (required for custom local root)
+- `--with-instructions` / `--without-instructions`
+- `--force`
+- `--repo <owner/repo>`
+- `--ref <git-ref>`
+- `--source local|github|auto`
+- `--codex-home <path>`
+- `--claude-home <path>`
+- `--codex-layout auto|codex|agents`
+- `--dry-run`
+
+## Install targets
+
+Codex:
+
+- global: `<codex_home>/skills/signature-map`
+- local: `<project>/.codex/skills/signature-map` or `<project>/.agents/skills/signature-map`
+
+Claude:
+
+- global: `${CLAUDE_HOME:-$HOME/.claude}/skills/signature-map`
+- local: `<project>/.claude/skills/signature-map`
+
+## Managed instructions
+
+Installer manages idempotent blocks in target instruction files:
+
+- Codex: `AGENTS.md`
+- Claude: `CLAUDE.md`
+
+Markers:
+
+- `<!-- BEGIN signature-map managed -->`
+- `<!-- END signature-map managed -->`
+
+`uninstall` removes managed blocks by default. Use `--keep-instructions` to keep them.
+
+## Policy snippet
+
+Use this if you want to maintain a manual policy block instead of installer-managed instructions:
+
+````md
+# Signature Map first
+
+1) Refresh before symbol-level navigation:
+
+```bash
+./scripts/sigmap refresh --root <repo_root>
+```
+
+2) Query declarations before broad scans:
+
+```bash
+./scripts/sigmap name <SymbolName> --root <repo_root> --no-refresh
+./scripts/sigmap search "<regex>" --field all --icase --root <repo_root> --no-refresh
+./scripts/sigmap open "<relative/file::symbol>" --root <repo_root> --context 60 --no-refresh
+```
+
+3) For call-site usage search, use `rg`:
+
+```bash
+rg -n "<symbol_or_pattern>" <repo_root>
+```
+
+4) Fallback order:
+
+```bash
+./scripts/sigmap doctor --root <repo_root>
+# then scoped rg/sed scans only if needed
+```
 ````
 
----
-
-## Installation
-
-Option A — copy the script into your repo (recommended):
-
-```
-your-repo/
-  scripts/
-    generate-signatures.sh
-```
-
-The script assumes **repo root is the parent folder** of the script directory (`scripts/..`).
-
-Option B — keep it anywhere, but preserve the same layout (script lives one level below repo root).
-
----
-
-## Usage
-
-From anywhere:
+## Update / uninstall / doctor
 
 ```bash
-./scripts/generate-signatures.sh
+./install.sh update --agent auto --scope global
+./install.sh uninstall --agent both --scope local --project-root "$PWD"
+./install.sh doctor --agent both --scope local --project-root "$PWD"
 ```
 
-Output:
+## Troubleshooting
 
-* `signatures.json` written to repo root
+| Problem | Check |
+|---|---|
+| `no supported agent environment detected` | run with explicit `--agent` and/or set `--codex-home` / `--claude-home` |
+| `destination exists` | rerun with `--force` |
+| local path mismatch (`.codex` vs `.agents`) | set `--codex-layout auto|codex|agents` |
+| generator build error | ensure `go` is available in `PATH` |
 
-You should see something like:
+## Security notes
 
-```
-Wrote 1234 signatures to /path/to/repo/signatures.json
-```
+- Prefer pinned refs/tags for remote installs in production workflows.
+- Review installer scripts before piping to shell.
+- This repo intentionally avoids personal absolute paths.
 
----
+## Artifact policy
 
-## Output format
-
-`signatures.json` is an array of entries:
-
-```json
-[
-  {
-    "path": "Sources/Foo/Bar.swift::doWork",
-    "signature": "func doWork(x: Int) async throws -> String",
-    "comment": "Performs the main job.\n- Parameter x: ...",
-    "line": 42
-  }
-]
-```
-
-Fields:
-
-* `path`: `<relative/file/path>::<symbolName>`
-* `signature`: extracted signature block (may span multiple lines)
-* `comment`: closest preceding comment block (normalized)
-* `line`: 1-based line number where signature starts
-
----
-
-## Typical agent prompt snippet
-
-Use the JSON as “API index”:
-
-> Here is `signatures.json` for the repository. Use it as an authoritative map of available functions/types. When you suggest code changes, reference entries by `path`. If you need implementation details, ask for the specific file.
-
----
-
-## Limitations / gotchas
-
-* Regex-based: some edge cases will be missed or mis-identified.
-* For JS/TS class bodies, method detection is simplified.
-* C/C++ parsing is heuristic and may match false positives in tricky macros/templates.
-* Comment association is “nearest preceding block” (with basic handling for decorators / preprocessors).
-
----
-
-## Contributing
-
-PRs welcome:
-
-* Add language patterns
-* Improve signature termination logic
-* Add optional filtering (by path/glob) or output splitting
-
----
-
-## Author
-
-GitHub: [https://github.com/Xopoko](https://github.com/Xopoko)
+`<repo_root>/signatures.json` is generated. Do not commit unless explicitly requested.
